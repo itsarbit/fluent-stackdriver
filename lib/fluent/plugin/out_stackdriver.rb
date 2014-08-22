@@ -1,7 +1,15 @@
 class StackDriverOutput < Fluent::Output
 
   # Register the plugin as fluent-stackdrive plugin..
-  Fluent::Plugin.register_output('fluent-stackdriver', self)
+  Fluent::Plugin.register_output('stackdriver', self)
+
+  # Initialize is called when the pulgin is first called.
+  def initialize
+    super
+    require 'net/http'
+    require 'uri'
+    require 'yajl'
+  end
 
   # StackDrive URL ex: https://custom-gateway.stackdriver.com/v1/custom
   config_param :stackdriver_url, :string, :default => 'https://custom-gateway.stackdriver.com/v1/custom'
@@ -18,14 +26,6 @@ class StackDriverOutput < Fluent::Output
 
   # StatckDriver API key.
   config_param :api_key, :string, :default => ''
-
-  # Initialize is called when the pulgin is first called.
-  def initialize
-    super
-    require 'net/http'
-    require 'uri'
-    require 'yajl'
-  end
 
   # Configure is called before starting in order to configure parameters.
   def configure(conf)
@@ -52,21 +52,25 @@ class StackDriverOutput < Fluent::Output
     @stackdriver_url
   end
 
-  def format_data(time, name, value)
-    fm_data['collect_at'] = time
-    fm_data['name'] = name
-    fm_data['value'] = value
-    return fm_data
+  def retrieve_gce_id()
+    url = URI.parse('http://metadata/computeMetadata/v1/instance/id')
+    req = Net::HTTP::Get.new(url.path)
+    req.add_field("X-Google-Metadata-Request", "True")
+    res = Net::HTTP.new(url.host, url.port).start do |http|
+      http.request(req)
+    end
+    return res
   end
 
-  def format_body(tag, time, record)
-    fm_record['instance'] = 123
-    fm_record['name'] = record['name']
-    fm_record['timestamp'] = record['@timestamp']
-    fm_record['proto_version'] = 1
-    fm_record['data'] = format_data(record['@timestamp'], record['name'], record['value'])
-    return fm_record
+  def format_gce_data(data, record)
+    test = Hash.new
+    test['collected_at'] = record['@timestamp']
+    test['name'] = record['name']
+    test['value'] = record['value']
+    data['data'] = test
+    # data['instance'] = retrieve_gce_id()
   end
+
 
   def set_header(req, tag, time, record)
     req['x-stackdriver-apikey'] = @api_key
@@ -75,7 +79,11 @@ class StackDriverOutput < Fluent::Output
   end
 
   def set_gce_body(req, tag, time, record)
-    req.body = Yajl.dump(format_body(tag, time, record))
+    data = Hash.new
+    data['timestamp'] = record['@timestamp']
+    data['proto_version'] = 1
+    format_gce_data(data, record)
+    req.body = Yajl.dump(data)
   end
 
   def set_body(req, tag, time, record)
@@ -86,7 +94,7 @@ class StackDriverOutput < Fluent::Output
   end
 
   def create_request(tag, time, record)
-    url = format_url(tag, time, record)
+    url = @stackdriver_url
     uri = URI.parse(url)
     req = Net::HTTP.const_get(@http_method.to_s.capitalize).new(uri.path)
     set_body(req, tag, time, record)
@@ -104,7 +112,9 @@ class StackDriverOutput < Fluent::Output
     res = nil
     begin
       @last_request_time = Time.now.to_f
-      res = Net::HTTP.new(uri.host, uri.port).start {|http| http.request(req) }
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.use_ssl = (uri.scheme == "https")
+      res = http.request(req)
     rescue IOError, EOFError, SystemCallError
       # server didn't respond
       $log.warn "Net::HTTP.#{req.method.capitalize} raises exception: #{$!.class}, '#{$!.message}'"
@@ -132,7 +142,7 @@ class StackDriverOutput < Fluent::Output
     chain.next
     es.each {|time,record|
       handle_record(tag, time, record)
-      #$stderr.puts "OK!"
     }
   end
 end
+
