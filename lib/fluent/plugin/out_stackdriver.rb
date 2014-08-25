@@ -48,10 +48,7 @@ class StackDriverOutput < Fluent::Output
     super
   end
 
-  def format_url(tag, time, record)
-    @stackdriver_url
-  end
-
+  # Retrive_gce_id is a helper function used to retrieve gce instance id.
   def retrieve_gce_id()
     url = URI.parse('http://metadata/computeMetadata/v1/instance/id')
     req = Net::HTTP::Get.new(url.path)
@@ -62,22 +59,25 @@ class StackDriverOutput < Fluent::Output
     return res
   end
 
+  # Format_gce_data is a function used to setup counter name value in a request.
   def format_gce_data(data, record)
-    test = Hash.new
-    test['collected_at'] = record['@timestamp']
-    test['name'] = record['name']
-    test['value'] = record['value']
-    data['data'] = test
-    # data['instance'] = retrieve_gce_id()
+    counter_data = Hash.new
+    counter_data['collected_at'] = record['@timestamp']
+    counter_data['name'] = record['name']
+    counter_data['value'] = record['value']
+    data['data'] = counter_data
   end
 
 
+  # Set_header is used to set http request header.
   def set_header(req, tag, time, record)
     req['x-stackdriver-apikey'] = @api_key
     req['user-agent'] = 'Fluent StackDriver Plugin'
     req['Content-Type'] = 'application/json'
   end
 
+  # Set_gce_body is called when cloud_type is gce and used to setup gce request
+  # body.
   def set_gce_body(req, tag, time, record)
     data = Hash.new
     data['timestamp'] = record['@timestamp']
@@ -86,6 +86,7 @@ class StackDriverOutput < Fluent::Output
     req.body = Yajl.dump(data)
   end
 
+  # Set_body is used to set http request body.
   def set_body(req, tag, time, record)
     if @cloud_type = :gce
       set_gce_body(req, tag, time, record)
@@ -93,6 +94,7 @@ class StackDriverOutput < Fluent::Output
     req
   end
 
+  # Create_request is called to setup request header and body.
   def create_request(tag, time, record)
     url = @stackdriver_url
     uri = URI.parse(url)
@@ -102,6 +104,7 @@ class StackDriverOutput < Fluent::Output
     return req, uri
   end
 
+  # Send_request is called to send out requests and return if error occurs.
   def send_request(req, uri)
     is_rate_limited = (@rate_limit_msec != 0 and not @last_request_time.nil?)
     if is_rate_limited and ((Time.now.to_f - @last_request_time) * 1000.0 < @rate_limit_msec)
@@ -129,7 +132,7 @@ class StackDriverOutput < Fluent::Output
     end
   end
 
-  # Handler
+  # Handler for setup each record.
   def handle_record(tag, time, record)
     req, uri = create_request(tag, time, record)
     send_request(req, uri)
@@ -145,4 +148,3 @@ class StackDriverOutput < Fluent::Output
     }
   end
 end
-
